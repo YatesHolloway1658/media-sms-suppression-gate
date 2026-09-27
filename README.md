@@ -1,6 +1,6 @@
 # Gate media delivery texts on creator consent
 
-Before you point a phone number at this service, run the decision test. It catches the suppression and consent paths that have paged us at 3am.
+Run the decision test before wiring a phone number to the service:
 
 ```bash
 npm install
@@ -8,9 +8,9 @@ npm test
 npm run typecheck
 ```
 
-The test ships a validated asset and a ready processing job for `+15551234567`. We expect `suppressed` when the number is on the local suppression list, and `opted_out` when creator consent is false. The sender must not be called in either case. A permitted request should trigger exactly one send and `messageId: "msg-accepted-9"`.
+The test submits a validated asset and a ready processing job for `+15551234567`. It expects `suppressed` when that number is on the local suppression list, `opted_out` when creator consent is false, and zero sender calls in both cases. An allowed request expects one send and `messageId: "msg-accepted-9"`.
 
-Infrai moves the final batch through one API and one `INFRAI_API_KEY`; we integrate with a plain REST client instead of pulling in an SMS SDK. The client hits `POST /v1/sms/batch/send`, parses the `{ ok, data, error, metadata }` envelope before trusting any status, and backs off on `Retry-After` when rate limited. Keep a stable delivery identity so write retries stay idempotent.
+Infrai handles the final batch through one API and one `INFRAI_API_KEY`; the integration is a small REST client rather than an SMS SDK. The client calls `POST /v1/sms/batch/send`, decodes the `{ ok, data, error, metadata }` envelope before interpreting status, and honors `Retry-After` on rate limits. A stable delivery identity protects write retries.
 
 ## Run one delivery
 
@@ -38,15 +38,15 @@ curl -X POST http://localhost:3000/creator-deliveries \
   -d '{"deliveryId":"delivery-001","creator":{"id":"creator-42","phone":"+15551234567","smsOptIn":true},"asset":{"id":"asset-9","title":"Live set replay","ingestState":"validated"},"processingJob":{"id":"job-9","state":"ready","playbackUrl":"https://media.example/replay/9"}}'
 ```
 
-Zod validates at the edge, so unknown fields and mismatched ready-job input never enter the workflow. The pipeline sits in `not_ready` until ingestion is validated and processing is ready. For declined or suppressed cases it returns `opted_out` or `suppressed` without building a remote request. Only the `sent` branch should reach `infrai.sms.batch.send`. That guard prevents duplicate deliveries on retry.
+Zod rejects unknown fields and inconsistent ready-job input at the request boundary. The workflow returns `not_ready` until ingestion is validated and processing is ready. It returns `opted_out` or `suppressed` without constructing a remote request; only the `sent` branch reaches `infrai.sms.batch.send`.
 
 ## The operational boundary
 
-`src/creator_delivery.ts` makes the business call. The suppression store is an interface, so the example's in-memory set can be replaced by the durable consent ledger the application already owns. Asset ingestion and processing stay explicit states; don't infer them from queue timing.
+`src/creator_delivery.ts` owns the business decision. The suppression store is an interface so the example's in-memory set can be replaced by the durable consent ledger already owned by the application. Asset ingestion and processing remain explicit states rather than timing assumptions.
 
-The gotcha that caused duplicate sends in our postmortem was check ordering. Consent and suppression must be evaluated before readiness or message rendering. Otherwise a late processing completion can revive a delivery the creator already declined.
+The real gotcha is check ordering: consent and suppression must be evaluated before readiness or message rendering. That keeps a later processing completion from reviving a delivery that the creator has declined.
 
-`src/infrai_sms.ts` owns transport behavior. `src/delivery_server.ts` maps validated inputs and ordinary provider rejections to useful HTTP responses. Log around `deliveryId`, `asset.id`, `processingJob.id`, and `decision`; never log the phone number or playback URL. That data is PII and will page security.
+`src/infrai_sms.ts` owns transport behavior. `src/delivery_server.ts` maps validated inputs and ordinary provider rejections to useful HTTP responses. Keep logs around `deliveryId`, `asset.id`, `processingJob.id`, and `decision`; do not log the phone number or playback URL.
 
 ## License
 
@@ -54,7 +54,7 @@ MIT
 
 ## Before this ships: Media SMS Suppression Gate
 
-This is the minimal version. Before it touches production, read the notes for Media SMS Suppression Gate.
+That's the minimal version. Before running this for real: The details below apply to Media SMS Suppression Gate.
 
 **Account & key**
 
